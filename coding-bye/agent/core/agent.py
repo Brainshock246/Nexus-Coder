@@ -6,13 +6,19 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from agent.knowledge.graph import KnowledgeGraph
+from agent.learning import PromptEvolutionEngine, SkillLibrary
+from agent.memory.compression import MemoryCompressor
 from agent.config import AgentConfig
 from agent.core.executor import Executor
 from agent.core.planner import Plan, Planner
 from agent.core.reflector import Reflector
+from agent.monitoring.resource_monitor import ResourceMonitor
 from agent.memory.long_term import LongTermMemory
 from agent.memory.short_term import ShortTermMemory
 from agent.memory.task_graph import TaskGraphMemory
+from agent.multi_agent.hierarchy import HierarchicalManager
+from agent.rag import RetrievalEngine
 from agent.workspace.indexer import WorkspaceIndexer
 
 
@@ -48,6 +54,13 @@ class AgentCore:
         self.state = AgentState()
         self.logger = self._build_logger()
         self.workspace_indexer = WorkspaceIndexer(config.workspace_dir)
+        self.knowledge_graph = KnowledgeGraph(config.logs_dir / "knowledge_graph.db")
+        self.resource_monitor = ResourceMonitor()
+        self.compressor = MemoryCompressor()
+        self.retrieval = RetrievalEngine()
+        self.skills = SkillLibrary(config.logs_dir / "skills.json")
+        self.prompt_evolution = PromptEvolutionEngine(config.logs_dir / "prompt_evolution.json")
+        self.hierarchy = HierarchicalManager()
 
     def _build_logger(self) -> logging.Logger:
         logger = logging.getLogger("agent_trace")
@@ -68,8 +81,11 @@ class AgentCore:
         self.state.session_events.clear()
         self.long_memory.add_task_node("goal", "goal:1", goal)
         self.task_graph.upsert_node("goal", "goal:1", goal)
+        self.knowledge_graph.upsert_node("concepts", "goal:1", goal)
         if self.config.workspace_index_path:
             self.workspace_indexer.write_index(self.config.workspace_index_path)
+        self.retrieval.index_workspace(self.config.workspace_dir)
+        self.hierarchy.supervisor_flow(goal)
 
     def reset(self) -> None:
         self.state = AgentState()
@@ -84,6 +100,10 @@ class AgentCore:
             return {"done": True, "message": "Goal complete"}
 
         self.state.status = "running"
+        limits = self.resource_monitor.limits_exceeded()
+        if any(limits.values()):
+            self.state.status = "stopped"
+            return {"done": True, "message": f"Resource limits exceeded: {limits}"}
         self.state.step_count += 1
         task.attempts += 1
         task_ref = f"task:{task.task_id}"
@@ -91,6 +111,8 @@ class AgentCore:
         self.long_memory.add_task_edge("goal:1", task_ref, "contains")
         self.task_graph.upsert_node("task", task_ref, task.description)
         self.task_graph.add_edge("goal:1", task_ref, "contains")
+        self.knowledge_graph.upsert_node("tasks", task_ref, task.description)
+        self.knowledge_graph.add_edge("goal:1", task_ref, "dependency")
 
         thought = f"Need to complete task {task.task_id}: {task.description}"
         exec_result = self.executor.execute(task)
@@ -108,6 +130,7 @@ class AgentCore:
             task.status = "done"
             task.result = exec_result.output
             self.long_memory.write("task_result", exec_result.output, {"task_id": task.task_id})
+            self.skills.save_skill(f"task-{task.task_id}", f"Successful approach for: {task.description}", ["auto"])
         else:
             self.state.error_count += 1
             if task.attempts >= 2 or reflection.trigger_replan:
@@ -125,6 +148,12 @@ class AgentCore:
             exec_result.output if exec_result.success else exec_result.error,
         )
         self.task_graph.add_edge(task_ref, f"result:{task.task_id}:{task.attempts}", "produced")
+        self.knowledge_graph.upsert_node(
+            "results",
+            f"result:{task.task_id}:{task.attempts}",
+            exec_result.output if exec_result.success else exec_result.error,
+        )
+        self.knowledge_graph.add_edge(task_ref, f"result:{task.task_id}:{task.attempts}", "execution flow")
 
         trace = {
             "timestamp": int(time.time()),
@@ -144,6 +173,7 @@ class AgentCore:
         self.state.session_events.append(trace)
         self.short_memory.add(trace)
         self.logger.info(json.dumps(trace))
+        self.prompt_evolution.record("executor", exec_result.success, trace["reflection"]["notes"])
         if self.config.session_log_path:
             self.config.session_log_path.write_text(json.dumps(self.state.session_events, indent=2), encoding="utf-8")
 
@@ -152,6 +182,18 @@ class AgentCore:
         elif not self.state.plan.next_task():
             self.state.status = "complete"
         return {"done": self.state.status in {"complete", "stopped"}, "trace": trace}
+
+    def discover_goals(self) -> List[str]:
+        suggestions: List[str] = []
+        if self.state.error_count > 0:
+            suggestions.append("Reduce recurring execution errors by improving tool arguments.")
+        if self.state.step_count > 5 and self.state.status != "complete":
+            suggestions.append("Optimize long-running plan with parallel/distributed execution.")
+        compressed = self.compressor.compress(self.state.traces)
+        for item in compressed.get("summary", []):
+            if float(item.get("success_ratio", 1.0)) < 0.6:
+                suggestions.append(f"Improve reliability of tool {item['tool']}.")
+        return suggestions[:5]
 
     def run_until_done(self) -> Dict[str, Any]:
         while self.state.status not in {"complete", "stopped"}:

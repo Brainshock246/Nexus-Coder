@@ -35,11 +35,14 @@ from agent.core.agent import AgentCore
 from agent.core.executor import Executor
 from agent.core.planner import Planner
 from agent.core.reflector import Reflector
+from agent.distributed import DistributedExecutor
+from agent.learning import ToolRewardStore
 from agent.llm import LocalProvider, OpenAIProvider
 from agent.memory.long_term import LongTermMemory
 from agent.memory.short_term import ShortTermMemory
 from agent.memory.task_graph import TaskGraphMemory
 from agent.multi_agent import MultiAgentManager
+from agent.rag import RetrievalEngine
 from agent.tools.code_executor import build_code_executor
 from agent.tools.file_tools import build_file_tools
 from agent.tools.json_tool import build_json_tool
@@ -95,6 +98,9 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
     long_memory = LongTermMemory(config.memory_db_path)
     task_graph = TaskGraphMemory(config.task_graph_db_path or config.memory_db_path)
     multi_agent = MultiAgentManager()
+    reward_store = ToolRewardStore(config.tool_reward_db_path or config.memory_db_path)
+    retriever = RetrievalEngine()
+    distributed = DistributedExecutor()
 
     def approve(command: str) -> bool:
         if not config.require_approval:
@@ -121,12 +127,14 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
 
     agent = AgentCore(
         config=config,
-        planner=Planner(),
+        planner=Planner(task_tree_path=config.workspace_dir / "task_tree.json"),
         executor=Executor(
             registry=registry,
             timeout_seconds=config.timeout_seconds,
             llm_provider=llm_provider,
             cache_ttl_seconds=config.cache_ttl_seconds,
+            reward_store=reward_store,
+            retriever=retriever,
         ),
         reflector=Reflector(),
         short_memory=short_memory,
@@ -134,6 +142,8 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
         task_graph=task_graph,
     )
     agent.multi_agent = multi_agent  # lightweight foundation attachment
+    agent.distributed = distributed
+    agent.reward_store = reward_store
     return agent
 
 
@@ -186,7 +196,7 @@ def repl(agent: AgentCore) -> int:
     session = PromptSession(history=FileHistory(str(history_file))) if PromptSession and FileHistory else None
     mode = "command"
     console.print("[bold green]Coding Bye Agentic CLI[/bold green]")
-    console.print("Use /goal, /plan, /run, /watch, /tools, /memory, /status, /reset, /mode, /roles, /exit")
+    console.print("Use /goal, /plan, /run, /watch, /tools, /memory, /status, /reset, /mode, /roles, /discover, /rewards, /exit")
 
     while True:
         raw = (session.prompt(f"[{mode}]> ") if session else input(f"[{mode}]> ")).strip()
@@ -208,6 +218,13 @@ def repl(agent: AgentCore) -> int:
         if raw == "/roles":
             roles = getattr(agent, "multi_agent", None)
             console.print({"roles": roles.available_roles() if roles else []})
+            continue
+        if raw == "/discover":
+            console.print({"goals": agent.discover_goals()})
+            continue
+        if raw == "/rewards":
+            store = getattr(agent, "reward_store", None)
+            console.print({"tool_ranking": store.ranking() if store else []})
             continue
         if raw == "/plan":
             show_plan(agent)

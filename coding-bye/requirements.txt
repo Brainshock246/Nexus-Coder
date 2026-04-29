@@ -1,3 +1,4 @@
 rich
 prompt_toolkit
 PyYAML
+psutil

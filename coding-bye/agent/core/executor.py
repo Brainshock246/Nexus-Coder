@@ -7,8 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
+from agent.learning.tool_rewards import ToolRewardStore
 from agent.llm.provider import LLMProvider
+from agent.llm.router import ModelRouter
 from agent.prompts import build_executor_prompt, build_tool_selector_prompt
+from agent.rag.retriever import RetrievalEngine
 from agent.core.planner import PlanTask
 from agent.tools.registry import ToolRegistry
 
@@ -32,6 +35,8 @@ class Executor:
         max_retries: int = 2,
         llm_provider: LLMProvider | None = None,
         cache_ttl_seconds: int = 600,
+        reward_store: ToolRewardStore | None = None,
+        retriever: RetrievalEngine | None = None,
     ) -> None:
         self.registry = registry
         self.timeout_seconds = timeout_seconds
@@ -41,9 +46,14 @@ class Executor:
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._cache_time: Dict[str, float] = {}
         self._last_errors: List[str] = []
+        self.reward_store = reward_store
+        self.retriever = retriever
+        self.model_router = ModelRouter()
 
     def _pick_tool(self, task_description: str) -> tuple[str, Dict[str, Any]]:
         names = list(self.registry.names())
+        if self.retriever:
+            _ = self.retriever.retrieve(task_description, limit=2)
         if self.llm_provider and names:
             result = self._llm_select_tool(task_description, names)
             if result:
@@ -69,6 +79,11 @@ class Executor:
 
     def _llm_select_tool(self, task_description: str, names: List[str]) -> tuple[str, Dict[str, Any]] | None:
         try:
+            route = self.model_router.route(task_description)
+            if self.llm_provider and hasattr(self.llm_provider, "model"):
+                provider_name = self.llm_provider.__class__.__name__.lower()
+                if route.provider in provider_name:
+                    setattr(self.llm_provider, "model", route.model)
             score_prompt = build_tool_selector_prompt(task_description, names)
             score_resp = self.llm_provider.generate(score_prompt, temperature=0.0, max_tokens=300)
             parsed_score = json.loads(score_resp.text or "{}")
@@ -124,6 +139,8 @@ class Executor:
                     result = future.result(timeout=self.timeout_seconds)
                     self._cache[cache_key] = result
                     self._cache_time[cache_key] = time.time()
+                    if self.reward_store:
+                        self.reward_store.record(tool_name, 1.0)
                     return ExecutionResult(
                         success=True,
                         tool_name=tool_name,
@@ -135,6 +152,8 @@ class Executor:
                     last_error = f"Tool timeout after {self.timeout_seconds}s"
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
+        if self.reward_store:
+            self.reward_store.record(tool_name, -1.0)
         self._last_errors.append(last_error)
         repeated = self._last_errors.count(last_error) >= 2 if last_error else False
         classification = self._classify_error(last_error)

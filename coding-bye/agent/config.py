@@ -27,6 +27,8 @@ class AgentConfig:
     workspace_index_path: Path | None = None
     task_graph_db_path: Path | None = None
     cache_ttl_seconds: int = 600
+    tool_reward_db_path: Path | None = None
+    skill_library_path: Path | None = None
 
 
 def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
@@ -81,6 +83,8 @@ def config_from_sources(overrides: Dict[str, Any] | None = None) -> AgentConfig:
         workspace_index_path=(root / str(merged.get("workspace_index", "agent/workspace/workspace_index.json"))).resolve(),
         task_graph_db_path=(root / str(merged.get("task_graph_db", "agent/memory/task_graph.db"))).resolve(),
         cache_ttl_seconds=int(merged.get("cache_ttl_seconds", 600)),
+        tool_reward_db_path=(root / str(merged.get("tool_reward_db", "agent/memory/tool_rewards.db"))).resolve(),
+        skill_library_path=(root / str(merged.get("skill_library", "agent/logs/skills.json"))).resolve(),
     )
 
 
@@ -96,4 +100,8 @@ def ensure_runtime_dirs(config: AgentConfig) -> None:
         config.workspace_index_path.parent.mkdir(parents=True, exist_ok=True)
     if config.task_graph_db_path:
         config.task_graph_db_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.tool_reward_db_path:
+        config.tool_reward_db_path.parent.mkdir(parents=True, exist_ok=True)
+    if config.skill_library_path:
+        config.skill_library_path.parent.mkdir(parents=True, exist_ok=True)
 
