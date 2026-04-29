@@ -1,68 +1,68 @@
-﻿# Coding Bye Agentic CLI System
+﻿# Nexus-Coder: Next-Generation Agent CLI
 
-Coding Bye is now a true CLI agent workflow engine with explicit **think -> plan -> act -> observe -> reflect** cycles, persistent memory, modular tools, autonomous mode, plugin loading, and structured trace logs.
+Nexus-Coder is a modular autonomous CLI agent upgraded with LLM provider abstractions, intelligent tool selection, workspace indexing, task graph memory, reflection-driven replanning, multi-agent foundations, structured observability, and stronger safety.
 
-## Architecture
+## Architecture Diagram
 
-```
-agent/
-  cli/main.py
-  core/{agent,planner,executor,reflector}.py
-  tools/{file_tools,web_tools,shell_tools,json_tool,python_tool,code_executor,memory_tool}.py
-  memory/{short_term,long_term}.py
-  plugins/
-  workspace/
-  logs/
-  config.py
-```
-
-## Features
-
-- Goal-driven execution with dynamic planning and replanning.
-- Modular tool system with automatic tool selection.
-- Persistent memory:
-  - Short-term (`agent/memory/short_term.json`)
-  - Long-term SQLite (`agent/memory/long_term.db`)
-- Reflection after every action (success/failure + improvement signal).
-- Manual mode and autonomous mode.
-- Safety controls:
-  - Dangerous shell command filtering
-  - Command approval prompts
-  - Timeouts + retries
-- Plugin auto-loading from `agent/plugins/*.py`.
-- Trace logging in `agent/logs/agent.log`.
-
-## Built-in commands
-
-- `/goal <text>`
-- `/tools`
-- `/memory`
-- `/plan`
-- `/run`
-- `/status`
-- `/reset`
-- `/mode command|agent`
-- `/exit`
-
-## Installation
-
-```bash
-python -m pip install -r requirements.txt
+```text
+CLI (/goal, /run, /watch) 
+   -> AgentCore (think -> plan -> act -> observe -> reflect)
+      -> Planner + Prompt Engine
+      -> Executor (LLM tool selection, scoring, retries, fallback, async)
+      -> Reflector (replan signals)
+      -> Memory
+         -> short_term.json
+         -> long_term.db
+         -> task_graph.db (nodes/edges)
+      -> Workspace Indexer (workspace_index.json)
+      -> Logs (agent.log + session.json)
+      -> MultiAgentManager (PlannerAgent/ExecutorAgent/ReviewerAgent foundation)
+      -> ToolRegistry + plugins
 ```
 
-## Run
+## Module Overview
 
-```bash
-python coding_bye.py
+- `agent/llm/`: provider abstraction (`LLMProvider`) + `OpenAIProvider` + `LocalProvider`.
+- `agent/prompts/`: JSON-only prompt builders for planner/executor/reflector/tool selector.
+- `agent/core/executor.py`: intelligent tool selection (LLM + scoring), validation, retries, timeout, fallback, async entrypoint, caching.
+- `agent/workspace/indexer.py`: generates `workspace_index.json` with file metadata and relationships.
+- `agent/memory/task_graph.py`: graph memory for goals/tasks/results and dependencies.
+- `agent/core/reflector.py`: failure and repeated-error detection with replanning trigger.
+- `agent/multi_agent/`: role and manager foundation for planner/executor/reviewer workers.
+- `agent/config.py`: dataclass config + `config.yaml` loading with overrides.
+
+## CLI Commands
+
+- `/goal <text>`: set goal and generate plan.
+- `/plan`: inspect current plan.
+- `/run`: execute step or autonomous loop.
+- `/watch`: live trace viewer (thought/plan/action/result/reflection).
+- `/tools`: list available tools.
+- `/memory`: summarize long-term memory.
+- `/roles`: show multi-agent role foundation.
+- `/status`: current runtime status.
+- `/reset`: reset state and short-term memory.
+- `/exit`: exit CLI.
+
+## Configuration
+
+Use `config.yaml` (optional), plus CLI flags.
+
+Example:
+
+```yaml
+provider: openai
+model: gpt-4.1-mini
+base_url: https://api.openai.com/v1
+workspace: agent/workspace
+logs: agent/logs
 ```
 
-Autonomous startup mode:
+Provider options:
+- `openai` (uses `OPENAI_API_KEY`)
+- `local` (uses `local_model_url`, defaults to Ollama-compatible endpoint)
 
-```bash
-python coding_bye.py --autonomous --max-steps 30 --error-limit 8
-```
-
-## Plugin format
+## Plugin Instructions
 
 Create `agent/plugins/my_tool.py`:
 
@@ -73,15 +73,28 @@ def register(registry):
     registry.register(
         Tool(
             name="my_tool",
-            description="Custom plugin tool",
+            description="Custom plugin",
             input_schema={"type": "object"},
-            run=lambda payload: {"ok": True},
+            run=lambda payload: {"ok": True, "payload": payload},
         )
     )
 ```
 
-## Tests
+## Example Usage
 
 ```bash
-python -m pytest -q
+python -m pip install -r requirements.txt
+python coding_bye.py --provider openai
+```
+
+Local model mode:
+
+```bash
+python coding_bye.py --provider local --model llama3.1
+```
+
+## Test Suite
+
+```bash
+python -m unittest discover -s tests -v
 ```

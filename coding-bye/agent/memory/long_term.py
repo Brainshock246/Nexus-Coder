@@ -24,6 +24,28 @@ class LongTermMemory:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_type TEXT NOT NULL,
+                ref_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_edges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_ref TEXT NOT NULL,
+                to_ref TEXT NOT NULL,
+                edge_type TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         self.conn.commit()
 
     def write(self, category: str, content: str, metadata: Dict[str, Any] | None = None) -> int:
@@ -84,6 +106,30 @@ class LongTermMemory:
             categories[item["category"]] = categories.get(item["category"], 0) + 1
         chunks = [f"{name}: {count}" for name, count in sorted(categories.items())]
         return "Memory summary -> " + ", ".join(chunks)
+
+    def add_task_node(self, node_type: str, ref_id: str, content: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO task_nodes (node_type, ref_id, content) VALUES (?, ?, ?)",
+            (node_type, ref_id, content),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def add_task_edge(self, from_ref: str, to_ref: str, edge_type: str = "depends_on") -> int:
+        cur = self.conn.execute(
+            "INSERT INTO task_edges (from_ref, to_ref, edge_type) VALUES (?, ?, ?)",
+            (from_ref, to_ref, edge_type),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def read_task_graph(self) -> Dict[str, Any]:
+        nodes = self.conn.execute("SELECT node_type, ref_id, content FROM task_nodes ORDER BY id").fetchall()
+        edges = self.conn.execute("SELECT from_ref, to_ref, edge_type FROM task_edges ORDER BY id").fetchall()
+        return {
+            "nodes": [{"node_type": n[0], "ref_id": n[1], "content": n[2]} for n in nodes],
+            "edges": [{"from_ref": e[0], "to_ref": e[1], "edge_type": e[2]} for e in edges],
+        }
 
     def close(self) -> None:
         self.conn.close()

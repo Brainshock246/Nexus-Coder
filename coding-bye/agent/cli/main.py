@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,22 +19,27 @@ try:
     from rich.panel import Panel
     from rich.progress import track
     from rich.table import Table
+    from rich.live import Live
 except ImportError:
     Console = None  # type: ignore[assignment]
     Panel = None  # type: ignore[assignment]
     Table = None  # type: ignore[assignment]
+    Live = None  # type: ignore[assignment]
 
     def track(items, description=""):
         for item in items:
             yield item
 
-from agent.config import AgentConfig, ensure_runtime_dirs
+from agent.config import config_from_sources, ensure_runtime_dirs
 from agent.core.agent import AgentCore
 from agent.core.executor import Executor
 from agent.core.planner import Planner
 from agent.core.reflector import Reflector
+from agent.llm import LocalProvider, OpenAIProvider
 from agent.memory.long_term import LongTermMemory
 from agent.memory.short_term import ShortTermMemory
+from agent.memory.task_graph import TaskGraphMemory
+from agent.multi_agent import MultiAgentManager
 from agent.tools.code_executor import build_code_executor
 from agent.tools.file_tools import build_file_tools
 from agent.tools.json_tool import build_json_tool
@@ -61,29 +68,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--model", default="gpt-4.1-mini")
     parser.add_argument("--base-url", default="https://api.openai.com/v1")
+    parser.add_argument("--provider", default=None, choices=["openai", "local"])
+    parser.add_argument("--config", default="config.yaml")
     return parser.parse_args()
 
 
 def bootstrap(args: argparse.Namespace) -> AgentCore:
-    root = Path(".").resolve()
-    config = AgentConfig(
-        base_url=args.base_url,
-        model=args.model,
-        api_key=os.getenv(args.api_key_env, ""),
-        workspace_dir=(root / args.workspace).resolve(),
-        logs_dir=(root / args.logs).resolve(),
-        memory_db_path=(root / "agent/memory/long_term.db").resolve(),
-        short_memory_path=(root / "agent/memory/short_term.json").resolve(),
-        plugins_dir=(root / args.plugins).resolve(),
-        max_steps=args.max_steps,
-        error_limit=args.error_limit,
-        autonomous_mode=args.autonomous,
+    config = config_from_sources(
+        {
+            "workspace": args.workspace,
+            "logs": args.logs,
+            "plugins": args.plugins,
+            "max_steps": args.max_steps,
+            "error_limit": args.error_limit,
+            "autonomous_mode": args.autonomous,
+            "model": args.model,
+            "base_url": args.base_url,
+            "api_key": os.getenv(args.api_key_env, ""),
+            "provider": args.provider,
+        }
     )
     ensure_runtime_dirs(config)
 
     registry = ToolRegistry()
     short_memory = ShortTermMemory(config.short_memory_path)
     long_memory = LongTermMemory(config.memory_db_path)
+    task_graph = TaskGraphMemory(config.task_graph_db_path or config.memory_db_path)
+    multi_agent = MultiAgentManager()
 
     def approve(command: str) -> bool:
         if not config.require_approval:
@@ -102,14 +113,28 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
     registry.register(build_memory_tool(long_memory))
     registry.load_plugins(config.plugins_dir)
 
-    return AgentCore(
+    llm_provider = (
+        LocalProvider(base_url=config.local_model_url, model=config.model)
+        if config.provider == "local"
+        else OpenAIProvider(base_url=config.base_url, model=config.model, api_key=config.api_key)
+    )
+
+    agent = AgentCore(
         config=config,
         planner=Planner(),
-        executor=Executor(registry=registry, timeout_seconds=config.timeout_seconds),
+        executor=Executor(
+            registry=registry,
+            timeout_seconds=config.timeout_seconds,
+            llm_provider=llm_provider,
+            cache_ttl_seconds=config.cache_ttl_seconds,
+        ),
         reflector=Reflector(),
         short_memory=short_memory,
         long_memory=long_memory,
+        task_graph=task_graph,
     )
+    agent.multi_agent = multi_agent  # lightweight foundation attachment
+    return agent
 
 
 def show_tools(agent: AgentCore) -> None:
@@ -161,7 +186,7 @@ def repl(agent: AgentCore) -> int:
     session = PromptSession(history=FileHistory(str(history_file))) if PromptSession and FileHistory else None
     mode = "command"
     console.print("[bold green]Coding Bye Agentic CLI[/bold green]")
-    console.print("Use /goal, /plan, /run, /tools, /memory, /status, /reset, /mode, /exit")
+    console.print("Use /goal, /plan, /run, /watch, /tools, /memory, /status, /reset, /mode, /roles, /exit")
 
     while True:
         raw = (session.prompt(f"[{mode}]> ") if session else input(f"[{mode}]> ")).strip()
@@ -180,6 +205,10 @@ def repl(agent: AgentCore) -> int:
         if raw == "/tools":
             show_tools(agent)
             continue
+        if raw == "/roles":
+            roles = getattr(agent, "multi_agent", None)
+            console.print({"roles": roles.available_roles() if roles else []})
+            continue
         if raw == "/plan":
             show_plan(agent)
             continue
@@ -195,6 +224,19 @@ def repl(agent: AgentCore) -> int:
                     "errors": agent.state.error_count,
                 }
             )
+            continue
+        if raw == "/watch":
+            if not Live:
+                console.print("Live view requires rich. Fallback to latest traces:")
+                for item in agent.state.traces[-5:]:
+                    render_trace(item)
+                continue
+            with Live(console=console, refresh_per_second=4) as live:
+                start = time.time()
+                while time.time() - start < 30:
+                    latest = agent.state.traces[-1] if agent.state.traces else {}
+                    live.update(Panel(json.dumps(latest, indent=2), title="Live Agent Trace"))
+                    time.sleep(0.25)
             continue
         if raw == "/reset":
             agent.reset()

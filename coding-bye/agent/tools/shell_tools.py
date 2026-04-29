@@ -12,7 +12,20 @@ def build_shell_tool(
     approval_callback: Callable[[str], bool],
     timeout_seconds: int = 45,
 ) -> Tool:
-    blocked_snippets = ["rm -rf /", "del /f /s /q", "format ", "shutdown", "reboot", ":(){:|:&};:"]
+    blocked_snippets = [
+        "rm -rf /",
+        "del /f /s /q",
+        "format ",
+        "shutdown",
+        "reboot",
+        ":(){:|:&};:",
+        "nmap ",
+        "nc -l",
+        "netcat -l",
+        "hydra ",
+        "sqlmap ",
+        "hping",
+    ]
 
     def run_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         command = str(payload["command"])
