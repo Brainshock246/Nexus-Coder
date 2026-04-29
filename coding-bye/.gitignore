@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+agent/memory/*.db
+agent/memory/*.json
+agent/logs/agent.log

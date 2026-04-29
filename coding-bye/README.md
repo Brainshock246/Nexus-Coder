@@ -1,49 +1,87 @@
-﻿# Coding Bye CLI
+﻿# Coding Bye Agentic CLI System
 
-Token-efficient CLI coding agent client for OpenAI-compatible APIs (OpenRouter, OpenAI, custom providers).
+Coding Bye is now a true CLI agent workflow engine with explicit **think -> plan -> act -> observe -> reflect** cycles, persistent memory, modular tools, autonomous mode, plugin loading, and structured trace logs.
 
-## What this gives you
+## Architecture
 
-- Accepts API key from:
-  - `--api-key`
-  - env var via `--api-key-env`
-  - hidden prompt fallback
-- Works with:
-  - `--provider openrouter`
-  - `--provider openai`
-  - `--provider custom --base-url <url>`
-- Uses a strong default system prompt in `system_prompt.txt` focused on productivity per token.
-
-## Quick start
-
-```bash
-cd coding-bye
-python coding_bye.py --help
+```
+agent/
+  cli/main.py
+  core/{agent,planner,executor,reflector}.py
+  tools/{file_tools,web_tools,shell_tools,json_tool,python_tool,code_executor,memory_tool}.py
+  memory/{short_term,long_term}.py
+  plugins/
+  workspace/
+  logs/
+  config.py
 ```
 
-### OpenRouter example
+## Features
+
+- Goal-driven execution with dynamic planning and replanning.
+- Modular tool system with automatic tool selection.
+- Persistent memory:
+  - Short-term (`agent/memory/short_term.json`)
+  - Long-term SQLite (`agent/memory/long_term.db`)
+- Reflection after every action (success/failure + improvement signal).
+- Manual mode and autonomous mode.
+- Safety controls:
+  - Dangerous shell command filtering
+  - Command approval prompts
+  - Timeouts + retries
+- Plugin auto-loading from `agent/plugins/*.py`.
+- Trace logging in `agent/logs/agent.log`.
+
+## Built-in commands
+
+- `/goal <text>`
+- `/tools`
+- `/memory`
+- `/plan`
+- `/run`
+- `/status`
+- `/reset`
+- `/mode command|agent`
+- `/exit`
+
+## Installation
 
 ```bash
-set OPENROUTER_API_KEY=your_key_here
-python coding_bye.py "Build a Python CLI TODO app." --provider openrouter --model openai/gpt-4.1-mini
+python -m pip install -r requirements.txt
 ```
 
-### OpenAI example
+## Run
 
 ```bash
-set OPENAI_API_KEY=your_key_here
-python coding_bye.py "Refactor this function for clarity." --provider openai --api-key-env OPENAI_API_KEY --model gpt-4.1-mini
+python coding_bye.py
 ```
 
-### Custom OpenAI-compatible provider
+Autonomous startup mode:
 
 ```bash
-set MY_KEY=your_key_here
-python coding_bye.py "Write unit tests for this module." --provider custom --base-url https://your-provider.example/v1 --api-key-env MY_KEY --model your-model-name
+python coding_bye.py --autonomous --max-steps 30 --error-limit 8
 ```
 
-## Notes
+## Plugin format
 
-- Keep keys in environment variables where possible.
-- You can override the system prompt with `--system-prompt path/to/prompt.txt`.
-- Add `--json` to inspect raw API response.
+Create `agent/plugins/my_tool.py`:
+
+```python
+from agent.tools.base import Tool
+
+def register(registry):
+    registry.register(
+        Tool(
+            name="my_tool",
+            description="Custom plugin tool",
+            input_schema={"type": "object"},
+            run=lambda payload: {"ok": True},
+        )
+    )
+```
+
+## Tests
+
+```bash
+python -m pytest -q
+```
