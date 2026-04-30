@@ -29,6 +29,8 @@ class AgentConfig:
     cache_ttl_seconds: int = 600
     tool_reward_db_path: Path | None = None
     skill_library_path: Path | None = None
+    enable_dynamic_tools: bool = False
+    enable_python_tool: bool = False
 
 
 def _parse_simple_yaml(path: Path) -> Dict[str, Any]:
@@ -85,6 +87,8 @@ def config_from_sources(overrides: Dict[str, Any] | None = None) -> AgentConfig:
         cache_ttl_seconds=int(merged.get("cache_ttl_seconds", 600)),
         tool_reward_db_path=(root / str(merged.get("tool_reward_db", "agent/memory/tool_rewards.db"))).resolve(),
         skill_library_path=(root / str(merged.get("skill_library", "agent/logs/skills.json"))).resolve(),
+        enable_dynamic_tools=bool(merged.get("enable_dynamic_tools", False)),
+        enable_python_tool=bool(merged.get("enable_python_tool", False)),
     )
 
 

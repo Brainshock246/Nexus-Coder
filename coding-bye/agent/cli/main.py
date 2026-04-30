@@ -73,6 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default="https://api.openai.com/v1")
     parser.add_argument("--provider", default=None, choices=["openai", "local"])
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--enable-dynamic-tools", action="store_true")
+    parser.add_argument("--enable-python-tool", action="store_true")
     return parser.parse_args()
 
 
@@ -89,11 +91,20 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
             "base_url": args.base_url,
             "api_key": os.getenv(args.api_key_env, ""),
             "provider": args.provider,
+            "enable_dynamic_tools": args.enable_dynamic_tools,
+            "enable_python_tool": args.enable_python_tool,
         }
     )
     ensure_runtime_dirs(config)
 
-    registry = ToolRegistry()
+    def confirm_plugin_load(name: str) -> bool:
+        answer = input(f"Load dynamic plugin '{name}'? [y/N]: ").strip().lower()
+        return answer in {"y", "yes"}
+
+    registry = ToolRegistry(
+        enable_dynamic_tools=config.enable_dynamic_tools,
+        confirm_plugin_load=confirm_plugin_load,
+    )
     short_memory = ShortTermMemory(config.short_memory_path)
     long_memory = LongTermMemory(config.memory_db_path)
     task_graph = TaskGraphMemory(config.task_graph_db_path or config.memory_db_path)
@@ -115,7 +126,8 @@ def bootstrap(args: argparse.Namespace) -> AgentCore:
     registry.register(build_shell_tool(config.workspace_dir, approve))
     registry.register(build_code_executor(config.workspace_dir))
     registry.register(build_json_tool())
-    registry.register(build_python_tool())
+    if config.enable_python_tool:
+        registry.register(build_python_tool())
     registry.register(build_memory_tool(long_memory))
     registry.load_plugins(config.plugins_dir)
 
